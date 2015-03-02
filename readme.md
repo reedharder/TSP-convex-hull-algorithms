@@ -1,0 +1,1 @@
+Various attempts in Python to beat a benchmark algorithm for the travelling salesman problem, described here: http://www2.isye.gatech.edu/~mgoetsch/cali/VEHICLE/TSP/TSP017__.HTM
