@@ -8,7 +8,7 @@ Created on Wed Jan 14 12:29:42 2015
 import numpy as np
 from scipy.spatial import ConvexHull
 from collections import OrderedDict
-from itertools import product
+from itertools import product, permutations
 import warnings
 import matplotlib.pyplot as plt
 import pdb
@@ -136,7 +136,174 @@ def benchmark(file=filepath):
         tour_length += np.linalg.norm(path_points[i]-path_points[i+1])
     tour_length += np.linalg.norm(path_points[-1]-path_points[0])
     return tour_length, num_interiors_original, path_indices, FullPoints, graph_material
+
+
+
+def benchmark_steal2(file=filepath):
+    #get set of points and number f points
+    FullPoints = np.load(file)
+    N=FullPoints.shape[0]
+    #full set of indices (0 to N-1 inclusive)
+    full_indices = np.arange(N)
     
+    #STEP 1: Get convex hull, interior points, and ordered segments of convex hull
+    #convex hull
+    CH = ConvexHull(FullPoints)
+    #get indices of hull vertices (in counter-clockwise order)
+    path_indices_original = CH.vertices
+    path_indices = path_indices_original
+    ##print(path_indices)
+    #get indices of interior points
+    interior_indices_original = np.setdiff1d(full_indices, path_indices, assume_unique=True)
+    ##print(interior_indices_original)
+    interior_indices = interior_indices_original
+    #get segments from ConvexHull
+    segments=construct_segments(path_indices)
+    segments_original=segments.copy()
+    #get starting number of interiors
+    num_interiors_original = interior_indices_original.size
+    #intialize material for graphing
+    graph_material= []
+    #a loop adding an interior point to the tour each time
+    for i in range(0,num_interiors_original):
+        #initialize dictionary of best segments for each point
+        best_segment_dict = {}
+        interiors = interior_indices.tolist()
+        #loop through interiors
+        for interior in interiors:
+            #find best segment for that interior
+            best_segment = []            
+            best_distance = -1
+            #get coordinates of interior
+            interior_point = FullPoints[interior]
+            for segment in segments.tolist():
+                #get coordinates of segment
+                segment_points = FullPoints[segment]
+                #calculate distance metric
+                distance = np.linalg.norm(segment_points[0] - interior_point)  + np.linalg.norm(segment_points[1] - interior_point) - np.linalg.norm(segment_points[0] - segment_points[1])
+                #if it is the best distance so far, save interior/segment combination
+                if best_distance == -1 or distance < best_distance:
+                    best_segment = segment                    
+                    best_distance = distance
+            #add interior/segment with best distance metric to dictionary
+            best_segment_dict[interior] =  best_segment
+        #loop through interior points  again, now with best interiors found, and choose interior poinr to add to tour
+        best_interior = -1
+        corresponding_best_segment = []
+        minRatio = -1 # initialize metric for finding best interior
+        for interior, segment in best_segment_dict.items():
+            #get coordinates of interior
+            interior_point = FullPoints[interior]
+            #get coordinates of segment
+            segment_points = FullPoints[segment]
+            Ratio =  (np.linalg.norm(segment_points[0] - interior_point)  + np.linalg.norm(segment_points[1] - interior_point)) / np.linalg.norm(segment_points[0] - segment_points[1])
+            if minRatio == -1 or Ratio < minRatio:
+                minRatio = Ratio
+                best_interior = interior
+                corresponding_best_segment = segment
+        #add best interior point found in loop above to subroute between its corresponding best segment
+                '''
+        print("path indices")
+        print(path_indices)
+        print("segment second point")
+        print(corresponding_best_segment[1])
+        print("interior")
+        print(best_interior)
+        '''
+        path_indices = np.insert(path_indices, np.where(path_indices ==corresponding_best_segment[1])[0], best_interior)        
+        
+        
+        
+         ##ADDED: new subpath added, adjust nearby points for minimum length
+        end_left = corresponding_best_segment[0]
+        end_right = corresponding_best_segment[1]
+        if end_left: 
+            #ADDED: potentially adjust order of segments near ends of new path  
+            try:
+                left_new_index =np.where(path_indices == end_left)[0][0]
+                right_new_index = np.where(path_indices == end_right)[0][0]
+            except IndexError:
+                print(path_indices)
+                print(segments)
+                print(end_left)
+                print(end_right)
+                left_new_index =np.where(path_indices == end_left)[0][0]
+                right_new_index = np.where(path_indices == end_right)[0][0]
+            #get full path size
+            path_length =path_indices.size
+            #5 points to readjust on the left
+            left_select = [i if i<path_length else i%path_length for i in range(left_new_index-3, left_new_index+2) ]
+            re_adjust_left = path_indices[left_select]
+            min_path_left =[[],-1]
+            for subroute in permutations(re_adjust_left[1:-1]):
+                #get potential subpath on the left
+                subroute_length =  0
+                subroute_full = [re_adjust_left[0], subroute[0],subroute[1], subroute[2],re_adjust_left[-1]]
+                #calculate length
+                for index, i in enumerate(subroute_full[:-1]):##range(0,len(subroute_full)):
+                    j = subroute_full[index+1]
+                    subroute_length += np.linalg.norm(FullPoints[i]-FullPoints[j])
+                if min_path_left[1] == -1 or subroute_length < min_path_left[1]:
+                    min_path_left=[subroute_full,subroute_length]
+            #replace with optimized path if different from original
+            if not np.all(re_adjust_left ==min_path_left[0]):
+                replacement_index = np.where(path_indices == re_adjust_left[0])[0][0]
+                repl = [i if i<path_length else i%path_length for i in range(replacement_index, replacement_index+5)]
+                np.put(path_indices,repl,min_path_left[0])
+                '''
+                print(path_indices)
+                print(repl)
+                print(left_new_index)
+                print(right_new_index)
+                print(min_path_left)
+                '''
+            #recalculate interior indices
+            #5 points to readjust on the right
+            right_select = [i if i<path_length else i%path_length for i in range(right_new_index-1, right_new_index+4) ]
+            re_adjust_right = path_indices[right_select]
+            min_path_right =[[],-1]
+            for subroute in permutations(re_adjust_right[1:-1]):
+                #get potential subpath on the left
+                subroute_length =  0
+                subroute_full = [re_adjust_right[0], subroute[0],subroute[1], subroute[2],re_adjust_right[-1]]
+                #calculate length
+                for index, i in enumerate(subroute_full[:-1]):##range(0,len(subroute_full)):
+                    j = subroute_full[index+1]
+                    subroute_length += np.linalg.norm(FullPoints[i]-FullPoints[j])
+                if min_path_right[1] == -1 or subroute_length < min_path_right[1]:
+                    min_path_right=[subroute_full,subroute_length]                
+            if not np.all(re_adjust_right ==min_path_right[0]):
+                replacement_index = np.where(path_indices == re_adjust_right[0])[0][0]
+                repl = [i if i<path_length else i%path_length for i in range(replacement_index, replacement_index+5)]
+                np.put(path_indices,repl,min_path_right[0])
+        
+        
+        
+        
+        
+        #recalculate interiors and segments...
+        #remove point added to tour from indicies
+        interior_indices = np.delete(interior_indices, np.where(interior_indices==best_interior))     
+        #get segments from current tour
+        segments=construct_segments(path_indices)
+        #add to material for graphing
+        graph_material.append([path_indices, interior_indices])
+        #if there are still more points to add, continue with this loop
+    #return final tour length,  OTHER PARAMETERS FOR DEBUGGING
+    #sum up length of tour
+    tour_length = 0
+    path_points = FullPoints[path_indices]
+    for i in range(0,path_indices.size-1):
+        tour_length += np.linalg.norm(path_points[i]-path_points[i+1])
+    tour_length += np.linalg.norm(path_points[-1]-path_points[0])
+    return tour_length, num_interiors_original, path_indices, FullPoints, graph_material
+    
+
+
+
+
+
+
 #perform benckmark Convex Hull alogorithm to solve TSP    
 def benchmark_improved(file=filepath):
     #get set of points and number f points
@@ -398,7 +565,171 @@ def benchmark_visible(file=filepath):
     tour_length += np.linalg.norm(path_points[-1]-path_points[0])
     return tour_length, num_interiors_original, path_indices, FullPoints, graph_material
     
+
+
+def benchmark_visible_steal2(file=filepath):
+    #get set of points and number f points
+    FullPoints = np.load(file)
+    N=FullPoints.shape[0]
+    #full set of indices (0 to N-1 inclusive)
+    full_indices = np.arange(N)
     
+    #STEP 1: Get convex hull, interior points, and ordered segments of convex hull
+    #convex hull
+    CH = ConvexHull(FullPoints)
+    #get indices of hull vertices (in counter-clockwise order)
+    path_indices_original = CH.vertices
+    path_indices = path_indices_original
+    ##print(path_indices)
+    #get indices of interior points
+    interior_indices_original = np.setdiff1d(full_indices, path_indices, assume_unique=True)
+    ##print(interior_indices_original)
+    interior_indices = interior_indices_original
+    #get segments from ConvexHull
+    segments=construct_segments(path_indices)
+    segments_original=segments.copy()
+    #get starting number of interiors
+    num_interiors_original = interior_indices_original.size
+    #intialize material for graphing
+    graph_material= []
+    #a loop adding an interior point to the tour each time
+    for i in range(0,num_interiors_original):
+        #initialize dictionary of best segments for each point
+        best_segment_dict = {}
+        interiors = interior_indices.tolist()
+        #loop through interiors
+        for interior in interiors:
+            #find best segment for that interior
+            best_segment = []            
+            best_distance = -1
+            #get coordinates of interior
+            interior_point = FullPoints[interior]
+            for segment in segments.tolist():
+                #get coordinates of segment
+                segment_points = FullPoints[segment]
+                #get  coordinates of current path
+                path_points = FullPoints[path_indices]
+                #if point is visible from the segment ( in other words, no tour points between segment and interior point...)
+                if is_visible(interior_point, segment_points, path_points ):
+                   
+                    #calculate distance metric
+                    distance = np.linalg.norm(segment_points[0] - interior_point)  + np.linalg.norm(segment_points[1] - interior_point) - np.linalg.norm(segment_points[0] - segment_points[1])
+                    #if it is the best distance so far, save interior/segment combination
+                    
+                    if best_distance == -1 or distance < best_distance:
+                        best_segment = segment                    
+                        best_distance = distance
+            #add interior/segment with best distance metric to dictionary
+            best_segment_dict[interior] =  best_segment
+        #loop through interior points  again, now with best interiors found, and choose interior poinr to add to tour
+        best_interior = -1
+        corresponding_best_segment = []
+        minRatio = -1 # initialize metric for finding best interior
+        for interior, segment in best_segment_dict.items():
+            #get coordinates of interior
+            interior_point = FullPoints[interior]
+            #get coordinates of segment
+            segment_points = FullPoints[segment]
+            Ratio =  (np.linalg.norm(segment_points[0] - interior_point)  + np.linalg.norm(segment_points[1] - interior_point)) / np.linalg.norm(segment_points[0] - segment_points[1])
+            if minRatio == -1 or Ratio < minRatio:
+                minRatio = Ratio
+                best_interior = interior
+                corresponding_best_segment = segment
+        #add best interior point found in loop above to subroute between its corresponding best segment
+                '''
+        print("path indices")
+        print(path_indices)
+        print("segment second point")
+        print(corresponding_best_segment[1])
+        print("interior")
+        print(best_interior)
+        '''
+        path_indices = np.insert(path_indices, np.where(path_indices ==corresponding_best_segment[1])[0], best_interior)        
+        ##ADDED: new subpath added, adjust nearby points for minimum length
+        end_left = corresponding_best_segment[0]
+        end_right = corresponding_best_segment[1]
+        if end_left: 
+            #ADDED: potentially adjust order of segments near ends of new path  
+            try:
+                left_new_index =np.where(path_indices == end_left)[0][0]
+                right_new_index = np.where(path_indices == end_right)[0][0]
+            except IndexError:
+                print(path_indices)
+                print(segments)
+                print(end_left)
+                print(end_right)
+                left_new_index =np.where(path_indices == end_left)[0][0]
+                right_new_index = np.where(path_indices == end_right)[0][0]
+            #get full path size
+            path_length =path_indices.size
+            #5 points to readjust on the left
+            left_select = [i if i<path_length else i%path_length for i in range(left_new_index-3, left_new_index+2) ]
+            re_adjust_left = path_indices[left_select]
+            min_path_left =[[],-1]
+            for subroute in permutations(re_adjust_left[1:-1]):
+                #get potential subpath on the left
+                subroute_length =  0
+                subroute_full = [re_adjust_left[0], subroute[0],subroute[1], subroute[2],re_adjust_left[-1]]
+                #calculate length
+                for index, i in enumerate(subroute_full[:-1]):##range(0,len(subroute_full)):
+                    j = subroute_full[index+1]
+                    subroute_length += np.linalg.norm(FullPoints[i]-FullPoints[j])
+                if min_path_left[1] == -1 or subroute_length < min_path_left[1]:
+                    min_path_left=[subroute_full,subroute_length]
+            #replace with optimized path if different from original
+            if not np.all(re_adjust_left ==min_path_left[0]):
+                replacement_index = np.where(path_indices == re_adjust_left[0])[0][0]
+                repl = [i if i<path_length else i%path_length for i in range(replacement_index, replacement_index+5)]
+                np.put(path_indices,repl,min_path_left[0])
+                '''
+                print(path_indices)
+                print(repl)
+                print(left_new_index)
+                print(right_new_index)
+                print(min_path_left)
+                '''
+            #recalculate interior indices
+            #5 points to readjust on the right
+            right_select = [i if i<path_length else i%path_length for i in range(right_new_index-1, right_new_index+4) ]
+            re_adjust_right = path_indices[right_select]
+            min_path_right =[[],-1]
+            for subroute in permutations(re_adjust_right[1:-1]):
+                #get potential subpath on the left
+                subroute_length =  0
+                subroute_full = [re_adjust_right[0], subroute[0],subroute[1], subroute[2],re_adjust_right[-1]]
+                #calculate length
+                for index, i in enumerate(subroute_full[:-1]):##range(0,len(subroute_full)):
+                    j = subroute_full[index+1]
+                    subroute_length += np.linalg.norm(FullPoints[i]-FullPoints[j])
+                if min_path_right[1] == -1 or subroute_length < min_path_right[1]:
+                    min_path_right=[subroute_full,subroute_length]                
+            if not np.all(re_adjust_right ==min_path_right[0]):
+                replacement_index = np.where(path_indices == re_adjust_right[0])[0][0]
+                repl = [i if i<path_length else i%path_length for i in range(replacement_index, replacement_index+5)]
+                np.put(path_indices,repl,min_path_right[0])
+        
+        
+        
+        #recalculate interiors and segments...
+        #remove point added to tour from indicies
+        interior_indices = np.delete(interior_indices, np.where(interior_indices==best_interior))     
+        #get segments from current tour
+        segments=construct_segments(path_indices)
+        #add to material for graphing
+        graph_material.append([path_indices, interior_indices])
+        ##print(len(path_indices))
+        #if there are still more points to add, continue with this loop
+    #return final tour length,  OTHER PARAMETERS FOR DEBUGGING
+    #sum up length of tour
+    tour_length = 0
+    path_points = FullPoints[path_indices]
+    for i in range(0,path_indices.size-1):
+        tour_length += np.linalg.norm(path_points[i]-path_points[i+1])
+    tour_length += np.linalg.norm(path_points[-1]-path_points[0])
+    return tour_length, num_interiors_original, path_indices, FullPoints, graph_material
+    
+    
+
 def TSP_solver(file, association_function, subpath_function, tiebreaker_function, tour_function):
     np.seterr(all='warn')
     #get set of points and number f points
@@ -565,6 +896,494 @@ def TSP_solver(file, association_function, subpath_function, tiebreaker_function
     tour_length += np.linalg.norm(path_points[-1]-path_points[0])
     
     return tour_length, loop_count, path_indices, FullPoints, graph_material
+
+
+
+def TSP_solver_steal2(file, association_function, subpath_function, tiebreaker_function, tour_function):
+    np.seterr(all='warn')
+    #get set of points and number f points
+    FullPoints = np.load(file)
+    N=FullPoints.shape[0]
+    #full set of indices (0 to N-1 inclusive)
+    full_indices = np.arange(N)
+    
+    #STEP 1: Get convex hull, interior points, and ordered segments of convex hull
+    #convex hull
+    CH = ConvexHull(FullPoints)
+    #get indices of hull vertices (in counter-clockwise order)
+    path_indices_original = CH.vertices
+    path_indices = path_indices_original
+    #get indices of interior points
+    interior_indices_original = np.setdiff1d(full_indices, path_indices, assume_unique=True)
+    interior_indices = interior_indices_original
+    #get segments from ConvexHull
+    segments=construct_segments(path_indices)
+    segments_original=segments.copy()
+    #run algorithm, expanding scope until all points are covered
+    loop_count = 0 #initialize loop count
+    graph_material = []
+    while path_indices.size < N:  #takes in variables segments, path_indices, interior_indices, these variables will be modified each loop
+        #STEP 2: for each segment of the current path defined by "segments", 
+        #associate a set of interior points (reduced set of indicies from interior_indices) according to a distance metric and save  in  dictionary
+        #and calculate a subpath between those points using the given subpath function
+        interior_dict = OrderedDict()
+        subpath_dict = OrderedDict() #initialize dict to store subpaths for each segment
+        for segment in segments.tolist():
+            #get coordinates of both segment points 
+            segment_points=FullPoints[segment]
+            #distance between segment points
+            segment_length = np.linalg.norm(segment_points[0]-segment_points[1])
+            #get interior points (as indices) associated with current segment using given association function
+            interiors_for_segment =  association_function(segment_length, segment_points, interior_indices, FullPoints, loop_count, N)
+            #save these points in a dictionary keyed by segment indices
+            interior_dict[tuple(segment)] = interiors_for_segment
+            #get interior coordinates
+            interior_points = FullPoints[interiors_for_segment]
+            #get subpath through these points using given subpath function            
+            segment_subpath = subpath_function(segment, segment_length, segment_points,  interiors_for_segment, interior_points)
+            ##if(91 in segment_subpath and loop_count==35):
+              ##  pdb.set_trace()
+            #save subpath in a dict keyed by segment
+            subpath_dict[tuple(segment)] = segment_subpath
+        #STEP 3: find overlaps between subpaths, remove these overlaps from all except for path where
+        # overlap fits "best" according to given tie-breaking function
+              
+        overlaps_left = True #assume there are some overlaps to begin loop
+        #dictionary keyed by interior point, value contains segment and the distance metric
+        best_segments = {}
+        donepoints = [] # list of points where overlaps have been removed
+        farthestDist = -1
+        while overlaps_left:
+            overlaps_left = False
+            #iterate through subpaths, get "best" segment according to distance metric
+            for segment, subpath in subpath_dict.items():
+                segment= list(segment)
+                #get interiors of subpath
+                subpath_interiors = subpath[1:-1]
+                #for each interior point
+                for int_point in subpath_interiors:
+                    if not int_point in donepoints: #if point not already taken care of...
+                        #get tie breaking distance
+                        dist = tiebreaker_function(segment, int_point, FullPoints)
+                        if tiebreaker_function.__name__ == 'TSP2_tiebreaker':                        #interior point, associated segment and distance metric to dictionary of "best" points if qualified
+                            if (not int_point in best_segments) or ( dist>best_segments[int_point][1]):                           
+                                best_segments[int_point] = [segment, dist]
+                                overlaps_left = True #there is still an overlap!
+                        elif tiebreaker_function.__name__ == 'TSP_tiebreaker':                                                  
+                            if farthestDist == -1 or dist > farthestDist:
+                                farthestDist = dist
+                                #save interior point associated with this dist
+                                farthest_int = int_point
+                                #save segment associated with this ratio
+                                farthest_segment = segment            
+                                overlaps_left = True #there is still an overlap!
+            #if no overlaps found in previous loop, break
+            if not overlaps_left:
+                break
+            
+            
+            #find next overlapping point to be removed (depending on tiebreaker function) and the segment with which it will remain
+            
+            if tiebreaker_function.__name__ == 'TSP2_tiebreaker':
+                minRatio = -1 #initialize minimum ratio between sum of distances of interior to segment points and the segment length
+                for int_point, segment_stats in best_segments.items():
+                    #get locations of interior point and given segment points
+                    int_location = FullPoints[int_point]
+                    segment_points = FullPoints[segment_stats[0]]
+                    segment_length = np.linalg.norm(segment_points[0]-segment_points[1])  
+                    # ratio between sum of distances of interior to segment points and the segment length
+                    #note: will be larger if the point is further away from the segment
+                    Ratio = (np.linalg.norm(segment_points[0]-int_location) + np.linalg.norm(segment_points[1]-int_location))/segment_length
+                    #if minRatio has not been found or current ratio is less than min ratio, update minRatio with current Ratio
+                    #interior point associated with this minRatio will be removed from all subpaths but the one associated with the segment involved in this ratio
+                    if minRatio == -1 or Ratio < minRatio:
+                        minRatio = Ratio
+                        #save interior point associated with this ratio
+                        farthest_int = int_point
+                        #save segment associated with this ratio
+                        farthest_segment = segment_stats[0]
+             
+            '''#
+            elif tiebreaker_function.__name__ == 'TSP2_tiebreaker':
+                farthestDist = -1
+                for int_point, segment_stats in best_segments.items():
+                    #get locations of interior point and given segment points
+                    int_location = FullPoints[int_point]
+                    segment_points = FullPoints[segment_stats[0]]
+                    segment_length = np.linalg.norm(segment_points[0]-segment_points[1])  
+                    #get distance stat calculated earlier
+                    dist = segment_stats[1]
+                    #find point with greatest dist
+                    if farthestDist == -1 or dist > farthestDist:
+                        farthestDist = dist
+                        #save interior point associated with this dist
+                        farthest_int = int_point
+                        #save segment associated with this ratio
+                        farthest_segment = segment_stats[0]
+            '''
+            #remove farthest interior point from all segments but the "best" according to tiebreaker
+            for segment, interior in interior_dict.items():
+                segment= list(segment)
+                if segment != farthest_segment: #i.e. if the point is not to remain in this segment
+                    #remove the point from interior points                    
+                    farthest_p_loc = np.where(interior==farthest_int)
+                    interiors_for_segment  = np.delete(interior, farthest_p_loc)
+                    interior_dict[tuple(segment)] = interiors_for_segment
+                    if farthest_p_loc[0]: #i.e. if point was found in interior and removed above, recalulate subpath without point
+                        
+                        #get coordinates of both segment points 
+                        segment_points=FullPoints[segment]
+                        #distance between segment points
+                        segment_length = np.linalg.norm(segment_points[0]-segment_points[1])
+                        #get interior coordinates
+                        interior_points = FullPoints[interiors_for_segment]
+                        #recalculate subpath for this segment using given subpath function                        
+                        segment_subpath = subpath_function(segment, segment_length, segment_points,  interiors_for_segment, interior_points)
+                        #save subpath in a dict keyed by segment
+                        subpath_dict[tuple(segment)] = segment_subpath
+                        
+                        
+                        
+            #add point to list of overlaps removed
+            donepoints.append(farthest_int)
+            
+                
+            
+        #STEP 4: recalulate current tour
+        segments, path_indices, interior_indices,  end_left, end_right = incr_tour_steal2(segments, subpath_dict,FullPoints, path_indices, interior_indices, full_indices)
+        ##ADDED: new subpath added, adjust nearby points for minimum length      
+        if end_left >= 0: 
+            #ADDED: potentially adjust order of segments near ends of new path  
+            try:
+                left_new_index =np.where(path_indices == end_left)[0][0]
+                right_new_index = np.where(path_indices == end_right)[0][0]
+            except IndexError:
+                print(path_indices)
+                print(segments)
+                print(end_left)
+                print(end_right)
+                left_new_index =np.where(path_indices == end_left)[0][0]
+                right_new_index = np.where(path_indices == end_right)[0][0]
+            #get full path size
+            path_length =path_indices.size
+            #5 points to readjust on the left
+            left_select = [i if i<path_length else i%path_length for i in range(left_new_index-3, left_new_index+2) ]
+            re_adjust_left = path_indices[left_select]
+            min_path_left =[[],-1]
+            for subroute in permutations(re_adjust_left[1:-1]):
+                #get potential subpath on the left
+                subroute_length =  0
+                subroute_full = [re_adjust_left[0], subroute[0],subroute[1], subroute[2],re_adjust_left[-1]]
+                #calculate length
+                for index, i in enumerate(subroute_full[:-1]):##range(0,len(subroute_full)):
+                    j = subroute_full[index+1]
+                    subroute_length += np.linalg.norm(FullPoints[i]-FullPoints[j])
+                if min_path_left[1] == -1 or subroute_length < min_path_left[1]:
+                    min_path_left=[subroute_full,subroute_length]
+            #replace with optimized path if different from original
+            if not np.all(re_adjust_left ==min_path_left[0]):
+                replacement_index = np.where(path_indices == re_adjust_left[0])[0][0]
+                repl = [i if i<path_length else i%path_length for i in range(replacement_index, replacement_index+5)]
+                np.put(path_indices,repl,min_path_left[0])
+                '''
+                print(path_indices)
+                print(repl)
+                print(left_new_index)
+                print(right_new_index)
+                print(min_path_left)
+                '''
+            #recalculate interior indices
+            #5 points to readjust on the right
+            right_select = [i if i<path_length else i%path_length for i in range(right_new_index-1, right_new_index+4) ]
+            re_adjust_right = path_indices[right_select]
+            min_path_right =[[],-1]
+            for subroute in permutations(re_adjust_right[1:-1]):
+                #get potential subpath on the left
+                subroute_length =  0
+                subroute_full = [re_adjust_right[0], subroute[0],subroute[1], subroute[2],re_adjust_right[-1]]
+                #calculate length
+                for index, i in enumerate(subroute_full[:-1]):##range(0,len(subroute_full)):
+                    j = subroute_full[index+1]
+                    subroute_length += np.linalg.norm(FullPoints[i]-FullPoints[j])
+                if min_path_right[1] == -1 or subroute_length < min_path_right[1]:
+                    min_path_right=[subroute_full,subroute_length]                
+            if not np.all(re_adjust_right ==min_path_right[0]):
+                replacement_index = np.where(path_indices == re_adjust_right[0])[0][0]
+                repl = [i if i<path_length else i%path_length for i in range(replacement_index, replacement_index+5)]
+                np.put(path_indices,repl,min_path_right[0])
+        
+        #increment loop count 
+        loop_count +=1
+        graph_material.append([path_indices, interior_indices])
+        
+    
+    #return final tour length, loop count, OTHER PARAMETERS FOR DEBUGGING
+    #sum up length of tour
+    tour_length = 0
+    path_points = FullPoints[path_indices]
+    for i in range(0,path_indices.size-1):
+        tour_length += np.linalg.norm(path_points[i]-path_points[i+1])
+    tour_length += np.linalg.norm(path_points[-1]-path_points[0])
+    
+    return tour_length, loop_count, path_indices, FullPoints, graph_material
+
+
+
+
+
+
+def TSP_solver_visible_steal2(file, association_function, subpath_function, tiebreaker_function, tour_function):
+    np.seterr(all='warn')
+    #get set of points and number f points
+    FullPoints = np.load(file)
+    N=FullPoints.shape[0]
+    #full set of indices (0 to N-1 inclusive)
+    full_indices = np.arange(N)
+    
+    #STEP 1: Get convex hull, interior points, and ordered segments of convex hull
+    #convex hull
+    CH = ConvexHull(FullPoints)
+    #get indices of hull vertices (in counter-clockwise order)
+    path_indices_original = CH.vertices
+    path_indices = path_indices_original
+    #get indices of interior points
+    interior_indices_original = np.setdiff1d(full_indices, path_indices, assume_unique=True)
+    interior_indices = interior_indices_original
+    #get segments from ConvexHull
+    segments=construct_segments(path_indices)
+    segments_original=segments.copy()
+    #run algorithm, expanding scope until all points are covered
+    loop_count = 0 #initialize loop count
+    graph_material = []
+    
+    while path_indices.size < N:  #takes in variables segments, path_indices, interior_indices, these variables will be modified each loop
+        #STEP 2: for each segment of the current path defined by "segments", 
+        #associate a set of interior points (reduced set of indicies from interior_indices) according to a distance metric and save  in  dictionary
+        #and calculate a subpath between those points using the given subpath function
+        interior_dict = OrderedDict()
+        subpath_dict = OrderedDict() #initialize dict to store subpaths for each segment
+        for segment in segments.tolist():
+            #get coordinates of both segment points 
+            segment_points=FullPoints[segment]
+            #distance between segment points
+            segment_length = np.linalg.norm(segment_points[0]-segment_points[1])
+            #get interior points (as indices) associated with current segment using given association function
+            interiors_for_segment =  association_function(segment_length, segment_points, interior_indices, FullPoints, loop_count, N)
+           
+            '''
+            #get  coordinates of current path
+            path_points = FullPoints[path_indices]
+            #ADDED STEP: eliminate non visibile points
+            if interiors_for_segment.size:
+                interiors_for_segment = interiors_for_segment[np.apply_along_axis(is_visible,1, FullPoints[interiors_for_segment], segment_points, path_points)]
+            '''
+            #ADDED STEP: eliminate  points that would cause intersections with tour
+            if interiors_for_segment.size:
+                interiors_for_segment= interiors_for_segment[np.apply_along_axis(tour_intersect_test, 1,FullPoints[interiors_for_segment],segment, segment_points, segments, FullPoints )]
+            
+            #save these points in a dictionary keyed by segment indices
+            interior_dict[tuple(segment)] = interiors_for_segment
+            #get interior coordinates
+            interior_points = FullPoints[interiors_for_segment]
+            #get subpath through these points using given subpath function            
+            segment_subpath = subpath_function(segment, segment_length, segment_points,  interiors_for_segment, interior_points)
+            ##if(91 in segment_subpath and loop_count==35):
+              ##  pdb.set_trace()
+            #save subpath in a dict keyed by segment
+            subpath_dict[tuple(segment)] = segment_subpath
+        #STEP 3: find overlaps between subpaths, remove these overlaps from all except for path where
+        # overlap fits "best" according to given tie-breaking function
+              
+        overlaps_left = True #assume there are some overlaps to begin loop
+        #dictionary keyed by interior point, value contains segment and the distance metric
+        best_segments = {}
+        donepoints = [] # list of points where overlaps have been removed
+        farthestDist = -1
+        while overlaps_left:
+            overlaps_left = False
+            #iterate through subpaths, get "best" segment according to distance metric
+            for segment, subpath in subpath_dict.items():
+                segment= list(segment)
+                #get interiors of subpath
+                subpath_interiors = subpath[1:-1]
+                #for each interior point
+                for int_point in subpath_interiors:
+                    if not int_point in donepoints: #if point not already taken care of...
+                        #get tie breaking distance
+                        dist = tiebreaker_function(segment, int_point, FullPoints)
+                        if tiebreaker_function.__name__ == 'TSP2_tiebreaker':                        #interior point, associated segment and distance metric to dictionary of "best" points if qualified
+                            if (not int_point in best_segments) or ( dist>best_segments[int_point][1]):                           
+                                best_segments[int_point] = [segment, dist]
+                                overlaps_left = True #there is still an overlap!
+                        elif tiebreaker_function.__name__ == 'TSP_tiebreaker':                                                  
+                            if farthestDist == -1 or dist > farthestDist:
+                                farthestDist = dist
+                                #save interior point associated with this dist
+                                farthest_int = int_point
+                                #save segment associated with this ratio
+                                farthest_segment = segment            
+                                overlaps_left = True #there is still an overlap!
+            #if no overlaps found in previous loop, break
+            if not overlaps_left:
+                break
+            
+            
+            #find next overlapping point to be removed (depending on tiebreaker function) and the segment with which it will remain
+            
+            if tiebreaker_function.__name__ == 'TSP2_tiebreaker':
+                minRatio = -1 #initialize minimum ratio between sum of distances of interior to segment points and the segment length
+                for int_point, segment_stats in best_segments.items():
+                    #get locations of interior point and given segment points
+                    int_location = FullPoints[int_point]
+                    segment_points = FullPoints[segment_stats[0]]
+                    segment_length = np.linalg.norm(segment_points[0]-segment_points[1])  
+                    # ratio between sum of distances of interior to segment points and the segment length
+                    #note: will be larger if the point is further away from the segment
+                    Ratio = (np.linalg.norm(segment_points[0]-int_location) + np.linalg.norm(segment_points[1]-int_location))/segment_length
+                    #if minRatio has not been found or current ratio is less than min ratio, update minRatio with current Ratio
+                    #interior point associated with this minRatio will be removed from all subpaths but the one associated with the segment involved in this ratio
+                    if minRatio == -1 or Ratio < minRatio:
+                        minRatio = Ratio
+                        #save interior point associated with this ratio
+                        farthest_int = int_point
+                        #save segment associated with this ratio
+                        farthest_segment = segment_stats[0]
+             
+            '''#
+            elif tiebreaker_function.__name__ == 'TSP2_tiebreaker':
+                farthestDist = -1
+                for int_point, segment_stats in best_segments.items():
+                    #get locations of interior point and given segment points
+                    int_location = FullPoints[int_point]
+                    segment_points = FullPoints[segment_stats[0]]
+                    segment_length = np.linalg.norm(segment_points[0]-segment_points[1])  
+                    #get distance stat calculated earlier
+                    dist = segment_stats[1]
+                    #find point with greatest dist
+                    if farthestDist == -1 or dist > farthestDist:
+                        farthestDist = dist
+                        #save interior point associated with this dist
+                        farthest_int = int_point
+                        #save segment associated with this ratio
+                        farthest_segment = segment_stats[0]
+            '''
+            #remove farthest interior point from all segments but the "best" according to tiebreaker
+            for segment, interior in interior_dict.items():
+                segment= list(segment)
+                if segment != farthest_segment: #i.e. if the point is not to remain in this segment
+                    #remove the point from interior points                    
+                    farthest_p_loc = np.where(interior==farthest_int)
+                    interiors_for_segment  = np.delete(interior, farthest_p_loc)
+                    interior_dict[tuple(segment)] = interiors_for_segment
+                    if farthest_p_loc[0]: #i.e. if point was found in interior and removed above, recalulate subpath without point
+                        
+                        #get coordinates of both segment points 
+                        segment_points=FullPoints[segment]
+                        #distance between segment points
+                        segment_length = np.linalg.norm(segment_points[0]-segment_points[1])
+                        #get interior coordinates
+                        interior_points = FullPoints[interiors_for_segment]
+                        #recalculate subpath for this segment using given subpath function                        
+                        segment_subpath = subpath_function(segment, segment_length, segment_points,  interiors_for_segment, interior_points)
+                        #save subpath in a dict keyed by segment
+                        subpath_dict[tuple(segment)] = segment_subpath
+                        
+                        
+                        
+            #add point to list of overlaps removed
+            donepoints.append(farthest_int)
+            
+                
+            
+        #STEP 4: recalulate current tour
+        segments, path_indices, interior_indices, end_left, end_right = incr_tour_steal2(segments, subpath_dict,FullPoints, path_indices, interior_indices, full_indices)
+        ##ADDED: new subpath added, adjust nearby points for minimum length      
+        if end_left >= 0: 
+            #ADDED: potentially adjust order of segments near ends of new path  
+            try:
+                left_new_index =np.where(path_indices == end_left)[0][0]
+                right_new_index = np.where(path_indices == end_right)[0][0]
+            except IndexError:
+                print(path_indices)
+                print(segments)
+                print(end_left)
+                print(end_right)
+                left_new_index =np.where(path_indices == end_left)[0][0]
+                right_new_index = np.where(path_indices == end_right)[0][0]
+            #get full path size
+            path_length =path_indices.size
+            #5 points to readjust on the left
+            left_select = [i if i<path_length else i%path_length for i in range(left_new_index-3, left_new_index+2) ]
+            re_adjust_left = path_indices[left_select]
+            min_path_left =[[],-1]
+            for subroute in permutations(re_adjust_left[1:-1]):
+                #get potential subpath on the left
+                subroute_length =  0
+                subroute_full = [re_adjust_left[0], subroute[0],subroute[1], subroute[2],re_adjust_left[-1]]
+                #calculate length
+                for index, i in enumerate(subroute_full[:-1]):##range(0,len(subroute_full)):
+                    j = subroute_full[index+1]
+                    subroute_length += np.linalg.norm(FullPoints[i]-FullPoints[j])
+                if min_path_left[1] == -1 or subroute_length < min_path_left[1]:
+                    min_path_left=[subroute_full,subroute_length]
+            #replace with optimized path if different from original
+            if not np.all(re_adjust_left ==min_path_left[0]):
+                replacement_index = np.where(path_indices == re_adjust_left[0])[0][0]
+                repl = [i if i<path_length else i%path_length for i in range(replacement_index, replacement_index+5)]
+                np.put(path_indices,repl,min_path_left[0])
+                '''
+                print(path_indices)
+                print(repl)
+                print(left_new_index)
+                print(right_new_index)
+                print(min_path_left)
+                '''
+            #recalculate interior indices
+            #5 points to readjust on the right
+            right_select = [i if i<path_length else i%path_length for i in range(right_new_index-1, right_new_index+4) ]
+            re_adjust_right = path_indices[right_select]
+            min_path_right =[[],-1]
+            for subroute in permutations(re_adjust_right[1:-1]):
+                #get potential subpath on the left
+                subroute_length =  0
+                subroute_full = [re_adjust_right[0], subroute[0],subroute[1], subroute[2],re_adjust_right[-1]]
+                #calculate length
+                for index, i in enumerate(subroute_full[:-1]):##range(0,len(subroute_full)):
+                    j = subroute_full[index+1]
+                    subroute_length += np.linalg.norm(FullPoints[i]-FullPoints[j])
+                if min_path_right[1] == -1 or subroute_length < min_path_right[1]:
+                    min_path_right=[subroute_full,subroute_length]                
+            if not np.all(re_adjust_right ==min_path_right[0]):
+                replacement_index = np.where(path_indices == re_adjust_right[0])[0][0]
+                repl = [i if i<path_length else i%path_length for i in range(replacement_index, replacement_index+5)]
+                np.put(path_indices,repl,min_path_right[0])
+                ''''
+                print(path_indices)
+                print(repl)
+                print(left_new_index)
+                print(right_new_index)
+                print(re_adjust_right)
+                print(min_path_right)
+                print(end_left)
+                print(end_right)
+                '''
+                
+        #increment loop count 
+        loop_count +=1
+        ##print(loop_count)
+        ##print(len(path_indices))
+        graph_material.append([path_indices, interior_indices])
+        
+    
+    #return final tour length, loop count, OTHER PARAMETERS FOR DEBUGGING
+    #sum up length of tour
+    tour_length = 0
+    path_points = FullPoints[path_indices]
+    for i in range(0,path_indices.size-1):
+        tour_length += np.linalg.norm(path_points[i]-path_points[i+1])
+    tour_length += np.linalg.norm(path_points[-1]-path_points[0])
+    
+    return tour_length, loop_count, path_indices, FullPoints, graph_material
     
 
 def TSP_solver_visible(file, association_function, subpath_function, tiebreaker_function, tour_function):
@@ -604,7 +1423,7 @@ def TSP_solver_visible(file, association_function, subpath_function, tiebreaker_
             segment_length = np.linalg.norm(segment_points[0]-segment_points[1])
             #get interior points (as indices) associated with current segment using given association function
             interiors_for_segment =  association_function(segment_length, segment_points, interior_indices, FullPoints, loop_count, N)
-            
+           
             '''
             #get  coordinates of current path
             path_points = FullPoints[path_indices]
@@ -747,6 +1566,193 @@ def TSP_solver_visible(file, association_function, subpath_function, tiebreaker_
     
     return tour_length, loop_count, path_indices, FullPoints, graph_material
     
+def TSP_solver_visible_steal(file, association_function, subpath_function, tiebreaker_function, tour_function):
+    np.seterr(all='warn')
+    #get set of points and number f points
+    FullPoints = np.load(file)
+    N=FullPoints.shape[0]
+    #full set of indices (0 to N-1 inclusive)
+    full_indices = np.arange(N)
+    
+    #STEP 1: Get convex hull, interior points, and ordered segments of convex hull
+    #convex hull
+    CH = ConvexHull(FullPoints)
+    #get indices of hull vertices (in counter-clockwise order)
+    path_indices_original = CH.vertices
+    path_indices = path_indices_original
+    #get indices of interior points
+    interior_indices_original = np.setdiff1d(full_indices, path_indices, assume_unique=True)
+    interior_indices = interior_indices_original
+    #get segments from ConvexHull
+    segments=construct_segments(path_indices)
+    segments_original=segments.copy()
+    #run algorithm, expanding scope until all points are covered
+    loop_count = 0 #initialize loop count
+    graph_material = []
+    
+    while path_indices.size < N:  #takes in variables segments, path_indices, interior_indices, these variables will be modified each loop
+        #STEP 2: for each segment of the current path defined by "segments", 
+        #associate a set of interior points (reduced set of indicies from interior_indices) according to a distance metric and save  in  dictionary
+        #and calculate a subpath between those points using the given subpath function
+        interior_dict = OrderedDict()
+        subpath_dict = OrderedDict() #initialize dict to store subpaths for each segment
+        for segment in segments.tolist():
+            #get coordinates of both segment points 
+            segment_points=FullPoints[segment]
+            #distance between segment points
+            segment_length = np.linalg.norm(segment_points[0]-segment_points[1])
+            #get interior points (as indices) associated with current segment using given association function
+            interiors_for_segment =  association_function(segment_length, segment_points, interior_indices, FullPoints, loop_count, N)
+            #ADDED STEP            
+            #path indices not including current segment
+            exterior_indices = np.delete(path_indices, np.where((path_indices==segment[0]) |(path_indices==segment[1] )))
+            #points that might be stolen            
+            exteriors_for_segment = TSP2_association_nonexpanding(segment_length, segment_points, exterior_indices, FullPoints, loop_count,N)
+            
+            
+            '''
+            #get  coordinates of current path
+            path_points = FullPoints[path_indices]
+            #ADDED STEP: eliminate non visibile points
+            if interiors_for_segment.size:
+                interiors_for_segment = interiors_for_segment[np.apply_along_axis(is_visible,1, FullPoints[interiors_for_segment], segment_points, path_points)]
+            '''
+            #ADDED STEP: eliminate  points that would cause intersections with tour
+            if interiors_for_segment.size:
+                interiors_for_segment= interiors_for_segment[np.apply_along_axis(tour_intersect_test, 1,FullPoints[interiors_for_segment],segment, segment_points, segments, FullPoints )]
+            interiors_for_segment = np.concatenate((interiors_for_segment, exteriors_for_segment))
+            #save these points in a dictionary keyed by segment indices ADDED: NOW CONSIDER EXTERIOR POINTS AS WELL
+            interior_dict[tuple(segment)] = interiors_for_segment
+            #get interior coordinates
+            interior_points = FullPoints[interiors_for_segment]
+            #get subpath through these points using given subpath function            
+            segment_subpath = subpath_function(segment, segment_length, segment_points,  interiors_for_segment, interior_points)
+            ##if(91 in segment_subpath and loop_count==35):
+              ##  pdb.set_trace()
+            #save subpath in a dict keyed by segment
+            subpath_dict[tuple(segment)] = segment_subpath
+        #STEP 3: find overlaps between subpaths, remove these overlaps from all except for path where
+        # overlap fits "best" according to given tie-breaking function
+              
+        overlaps_left = True #assume there are some overlaps to begin loop
+        #dictionary keyed by interior point, value contains segment and the distance metric
+        best_segments = {}
+        donepoints = [] # list of points where overlaps have been removed
+        farthestDist = -1
+        while overlaps_left:
+            overlaps_left = False
+            #iterate through subpaths, get "best" segment according to distance metric
+            for segment, subpath in subpath_dict.items():
+                segment= list(segment)
+                #get interiors of subpath
+                subpath_interiors = subpath[1:-1]
+                #for each interior point
+                for int_point in subpath_interiors:
+                    if not int_point in donepoints: #if point not already taken care of...
+                        #get tie breaking distance
+                        dist = tiebreaker_function(segment, int_point, FullPoints)
+                        if tiebreaker_function.__name__ == 'TSP2_tiebreaker':                        #interior point, associated segment and distance metric to dictionary of "best" points if qualified
+                            if (not int_point in best_segments) or ( dist>best_segments[int_point][1]):                           
+                                best_segments[int_point] = [segment, dist]
+                                overlaps_left = True #there is still an overlap!
+                        elif tiebreaker_function.__name__ == 'TSP_tiebreaker':                                                  
+                            if farthestDist == -1 or dist > farthestDist:
+                                farthestDist = dist
+                                #save interior point associated with this dist
+                                farthest_int = int_point
+                                #save segment associated with this ratio
+                                farthest_segment = segment            
+                                overlaps_left = True #there is still an overlap!
+            #if no overlaps found in previous loop, break
+            if not overlaps_left:
+                break
+            
+            
+            #find next overlapping point to be removed (depending on tiebreaker function) and the segment with which it will remain
+            
+            if tiebreaker_function.__name__ == 'TSP2_tiebreaker':
+                minRatio = -1 #initialize minimum ratio between sum of distances of interior to segment points and the segment length
+                for int_point, segment_stats in best_segments.items():
+                    #get locations of interior point and given segment points
+                    int_location = FullPoints[int_point]
+                    segment_points = FullPoints[segment_stats[0]]
+                    segment_length = np.linalg.norm(segment_points[0]-segment_points[1])  
+                    # ratio between sum of distances of interior to segment points and the segment length
+                    #note: will be larger if the point is further away from the segment
+                    Ratio = (np.linalg.norm(segment_points[0]-int_location) + np.linalg.norm(segment_points[1]-int_location))/segment_length
+                    #if minRatio has not been found or current ratio is less than min ratio, update minRatio with current Ratio
+                    #interior point associated with this minRatio will be removed from all subpaths but the one associated with the segment involved in this ratio
+                    if minRatio == -1 or Ratio < minRatio:
+                        minRatio = Ratio
+                        #save interior point associated with this ratio
+                        farthest_int = int_point
+                        #save segment associated with this ratio
+                        farthest_segment = segment_stats[0]
+             
+            '''#
+            elif tiebreaker_function.__name__ == 'TSP2_tiebreaker':
+                farthestDist = -1
+                for int_point, segment_stats in best_segments.items():
+                    #get locations of interior point and given segment points
+                    int_location = FullPoints[int_point]
+                    segment_points = FullPoints[segment_stats[0]]
+                    segment_length = np.linalg.norm(segment_points[0]-segment_points[1])  
+                    #get distance stat calculated earlier
+                    dist = segment_stats[1]
+                    #find point with greatest dist
+                    if farthestDist == -1 or dist > farthestDist:
+                        farthestDist = dist
+                        #save interior point associated with this dist
+                        farthest_int = int_point
+                        #save segment associated with this ratio
+                        farthest_segment = segment_stats[0]
+            '''
+            #remove farthest interior point from all segments but the "best" according to tiebreaker
+            for segment, interior in interior_dict.items():
+                segment= list(segment)
+                if segment != farthest_segment: #i.e. if the point is not to remain in this segment
+                    #remove the point from interior points                    
+                    farthest_p_loc = np.where(interior==farthest_int)
+                    interiors_for_segment  = np.delete(interior, farthest_p_loc)
+                    interior_dict[tuple(segment)] = interiors_for_segment
+                    if farthest_p_loc[0]: #i.e. if point was found in interior and removed above, recalulate subpath without point
+                        
+                        #get coordinates of both segment points 
+                        segment_points=FullPoints[segment]
+                        #distance between segment points
+                        segment_length = np.linalg.norm(segment_points[0]-segment_points[1])
+                        #get interior coordinates
+                        interior_points = FullPoints[interiors_for_segment]
+                        #recalculate subpath for this segment using given subpath function                        
+                        segment_subpath = subpath_function(segment, segment_length, segment_points,  interiors_for_segment, interior_points)
+                        #save subpath in a dict keyed by segment
+                        subpath_dict[tuple(segment)] = segment_subpath
+                        
+                        
+                        
+            #add point to list of overlaps removed
+            donepoints.append(farthest_int)
+            
+                
+            
+        #STEP 4: recalulate current tour
+        segments, path_indices, interior_indices = incr_tour_steal(segments, subpath_dict,FullPoints, path_indices, interior_indices, full_indices)
+        #increment loop count 
+        loop_count +=1
+        ##print(loop_count)
+        graph_material.append([path_indices, interior_indices])
+        
+    
+    #return final tour length, loop count, OTHER PARAMETERS FOR DEBUGGING
+    #sum up length of tour
+    tour_length = 0
+    path_points = FullPoints[path_indices]
+    for i in range(0,path_indices.size-1):
+        tour_length += np.linalg.norm(path_points[i]-path_points[i+1])
+    tour_length += np.linalg.norm(path_points[-1]-path_points[0])
+    
+    return tour_length, loop_count, path_indices, FullPoints, graph_material
+    
 #tour adds only the best subpath each time through        
 def incr_tour(segments, subpath_dict,FullPoints, path_indices, interior_indices, full_indices):     
     bestPath = [[],-1] #intialize best path and is quality metric
@@ -771,6 +1777,80 @@ def incr_tour(segments, subpath_dict,FullPoints, path_indices, interior_indices,
     if bestPath[0]:
         #insert best subpath into main list of path indices, just before second point of segment
         path_indices = np.insert(path_indices,np.where(path_indices ==bestPath[0][1])[0], subpath_dict[tuple(bestPath[0])][1:-1])
+        #recalculate interior indices
+        interior_indices = np.setdiff1d(full_indices, path_indices, assume_unique=True)
+        #recalculate segments
+        segments=construct_segments(path_indices)  
+    
+    
+    return segments, path_indices, interior_indices
+    
+#checks to see if points in segments nearby can be profitably reassigned
+def incr_tour_steal2(segments, subpath_dict,FullPoints, path_indices, interior_indices, full_indices):     
+    bestPath = [[],-1] #intialize best path and is quality metric
+    for segment, subpath in subpath_dict.items():
+        segment= list(segment)
+        if len(subpath) > 2: #i.e. if subpath is not just one of the original segments...
+            path_length = 0 #initialize subpath length
+            #get courdinates of subpath points
+            path_points = FullPoints[subpath]
+            #sum up length of subpath
+            for i in range(0,len(subpath)-1):
+                path_length += np.linalg.norm(path_points[i]-path_points[i+1])                
+            #get a metric for how good this length is
+            #first, calculate difference between legnth of original segment and new subpath
+            deviation = path_length - np.linalg.norm(path_points[0]-path_points[-1])
+            normalized_dev = deviation/(len(subpath) - 2) #normalize by number of interior points  
+            #if this is the new best subpath, save
+            if (bestPath[1] == -1) or normalized_dev < bestPath[1]:
+                bestPath[0] = segment
+                bestPath[1] = normalized_dev
+    #if there is a best path, add it to the tour that started just as convex hull
+    if bestPath[0]:
+        
+        #insert best subpath into main list of path indices, just before second point of segment
+        path_indices = np.insert(path_indices,np.where(path_indices ==bestPath[0][1])[0], subpath_dict[tuple(bestPath[0])][1:-1])
+        #recalculate interior indices
+        interior_indices = np.setdiff1d(full_indices, path_indices, assume_unique=True)
+        #recalculate segments
+        segments=construct_segments(path_indices)  
+        #end points of best subpath
+        end_left = bestPath[0][0]
+        end_right = bestPath[0][-1]
+    else:
+        end_left = -1
+        end_right =-1
+    
+    return segments, path_indices, interior_indices, end_left, end_right
+    
+    
+#tour adds only the best subpath each time through        
+def incr_tour_steal(segments, subpath_dict,FullPoints, path_indices, interior_indices, full_indices):     
+    bestPath = [[],-1] #intialize best path and is quality metric
+    for segment, subpath in subpath_dict.items():
+        segment= list(segment)
+        if len(subpath) > 2: #i.e. if subpath is not just one of the original segments...
+            path_length = 0 #initialize subpath length
+            #get courdinates of subpath points
+            path_points = FullPoints[subpath]
+            #sum up length of subpath
+            for i in range(0,len(subpath)-1):
+                path_length += np.linalg.norm(path_points[i]-path_points[i+1])                
+            #get a metric for how good this length is
+            #first, calculate difference between legnth of original segment and new subpath
+            deviation = path_length - np.linalg.norm(path_points[0]-path_points[-1])
+            normalized_dev = deviation/(len(subpath) - 2) #normalize by number of interior points  
+            #if this is the new best subpath, save
+            if (bestPath[1] == -1) or normalized_dev < bestPath[1]:
+                bestPath[0] = segment
+                bestPath[1] = normalized_dev
+    #if there is a best path, add it to the tour that started just as convex hull
+    if bestPath[0]:
+        points_to_add = subpath_dict[tuple(bestPath[0])][1:-1]
+        path_indices = np.array([index for index in path_indices.tolist() if index not in points_to_add])
+        #insert best subpath into main list of path indices, just before second point of segment
+    
+        path_indices = np.insert(path_indices,np.where(path_indices ==bestPath[0][1])[0], points_to_add)
         #recalculate interior indices
         interior_indices = np.setdiff1d(full_indices, path_indices, assume_unique=True)
         #recalculate segments
@@ -825,6 +1905,14 @@ def TSP2_association(segment_length, segment_points, interior_indices, FullPoint
     #get point indices where point is within dFactor*segment_length of both segment points
     return interior_indices[((np.linalg.norm(FullPoints[interior_indices] - segment_points[0], axis=1) <= (dFactor*segment_length)) & (np.linalg.norm(FullPoints[interior_indices] - segment_points[1], axis=1) <= (dFactor*segment_length)) )]
 
+def TSP2_association_nonexpanding(segment_length, segment_points, path_indices_other, FullPoints, loop_count, N):    
+    #get expansion factor for computing area within which points will be associated, based on loop number and total number of points
+    dFactor = 1
+    #get point indices where point is within dFactor*segment_length of both segment points
+    return path_indices_other[((np.linalg.norm(FullPoints[path_indices_other] - segment_points[0], axis=1) <= (dFactor*segment_length)) & (np.linalg.norm(FullPoints[path_indices_other] - segment_points[1], axis=1) <= (dFactor*segment_length)) )]
+
+
+        
 
         
 #try stealing exteriors from nearby using original dFactor for association then pooling for subpath
@@ -1033,8 +2121,11 @@ def master(file=filepath):
     print("Done")
     '''
     return  FullPoints
-        
-        
+
+#master to test steal function
+
+
+
 import matplotlib.animation as animation
 #fig = plt.figure()
 #ax = plt.axes(xlim=(0, 100), ylim=(0, 100))
@@ -1048,7 +2139,9 @@ tour_function= incr_tour
 '''
 tour_length, loop_count, path_indices, FullPoints, graph_material =TSP_solver(file, association_function, subpath_function, tiebreaker_function, tour_function)
 tour_length, loop_count, path_indices, FullPoints, graph_material =TSP_solver_visible(file, association_function, subpath_function, tiebreaker_function, tour_function)
-
+t = time.time()
+tour_length, loop_count, path_indices, FullPoints, graph_material =TSP_solver_visible_steal2(file, association_function, subpath_function, tiebreaker_function, tour_function)
+elapsed = time.time() - t 
 
 #to do: email vids and lengths to vikrant, JP. find random error, time functions and get average, optimize benchmark according to vikrant's algorithm, run over many examples to get different lengths
 benchtour, loop_count,  path_indices, FullPoints, graph_material = benchmark(file)
@@ -1068,6 +2161,10 @@ t = time.time()
 benchtour, loop_count,  path_indices, FullPoints, graph_material = benchmark_improved(file)
 elapsed = time.time() - t 
 '''
+association_function = TSP2_association
+subpath_function = TSP2_SubPath
+tiebreaker_function = TSP2_tiebreaker
+tour_function= incr_tour
 
 
 def cumulative_run(N=100,numfiles = 100, association_function = TSP2_association, subpath_function = TSP2_SubPath, tiebreaker_function = TSP2_tiebreaker, tour_function= incr_tour):
@@ -1114,14 +2211,91 @@ def cumulative_run(N=100,numfiles = 100, association_function = TSP2_association
     
     return [test_tour_lengths, test_tour_times, bench_tour_lengths, bench_tour_times]
     
+
+def cumulative_run_steal(N=100,numfiles = 25, association_function = TSP2_association, subpath_function = TSP2_SubPath, tiebreaker_function = TSP2_tiebreaker, tour_function= incr_tour):
+    import pandas as pd 
+    rows = []
+    algs = ['benchmark', 'bench_steal', 'tsp2', 'tsp2_vis_steal', 'tsp2_vis', 'tsp2_steal']
+    #loop through files, record times and tour lengths for each run for test and benchmark algorithm
+    ##for i in range(1,numfiles+1):
+    for i in range(26,100+1):
+        file = "C:\\Users\\Reed\\Desktop\\vaze_tsp\\" + "zhullfile_py_%s_%s.txt.npy" % (N, i)
+           
+        
+        
+        benchtour1, loop_count,  path_indices, FullPoints, graph_material = benchmark(file)
+        benchtour2, loop_count,  path_indices, FullPoints, graph_material = benchmark_steal2(file)
+        tour_length3, loop_count, path_indices, FullPoints, graph_material =TSP_solver(file, association_function, subpath_function, tiebreaker_function, tour_function)    
+        tour_length4, loop_count, path_indices, FullPoints, graph_material =TSP_solver_visible_steal2(file, association_function, subpath_function, tiebreaker_function, tour_function)    
+        tour_length5, loop_count, path_indices, FullPoints, graph_material =TSP_solver_visible(file, association_function, subpath_function, tiebreaker_function, tour_function)    
+        tour_length6, loop_count, path_indices, FullPoints, graph_material =TSP_solver_steal2(file, association_function, subpath_function, tiebreaker_function, tour_function)    
+       
+        lengths = [benchtour1, benchtour2, tour_length3, tour_length4, tour_length5, tour_length6]
+        print(lengths)
+        best = algs[lengths.index(min(lengths))]
+        row = {'benchmark':benchtour1, 'bench_steal':benchtour2, 'tsp2': tour_length3, 'tsp2_vis_steal':tour_length4, 'tsp2_vis':tour_length5, 'tsp2_steal':tour_length6, 'best':best }
+        rows.append(row)
+        
+    dataframe = pd.DataFrame(rows)
+    #cols = [col for col in stealdf.columns if col!='best']
+    #avgs=stealdf[cols].apply(np.mean,0)
+
+    dataframe.to_csv('stealing_bench.csv')
+    return dataframe
     
-    
-    
+def cumulative_run_single(N=100,numfiles = 100, association_function = TSP2_association, subpath_function = TSP2_SubPath, tiebreaker_function = TSP2_tiebreaker, tour_function= incr_tour):
+    import pandas as pd 
+    rows = []
+    ##algs = ['benchmark', 'bench_steal', 'tsp2', 'tsp2_vis_steal', 'tsp2_vis', 'tsp2_steal']
+    #loop through files, record times and tour lengths for each run for test and benchmark algorithm
+    with open('bench_vis_steal_92.txt','a') as outfile:
+        for i in range(17,numfiles+1):
+        ##for i in range(26,100+1):
+            file = "C:\\Users\\Reed\\Desktop\\vaze_tsp\\" + "zhullfile_py_%s_%s.txt.npy" % (N, i)
+               
+            
+            t = time.time()
+            benchtour1, loop_count,  path_indices, FullPoints, graph_material = benchmark_visible_steal2(file)
+            t2 = time.time()-t        
+            '''
+            benchtour2, loop_count,  path_indices, FullPoints, graph_material = benchmark_steal2(file)
+            tour_length3, loop_count, path_indices, FullPoints, graph_material =TSP_solver(file, association_function, subpath_function, tiebreaker_function, tour_function)    
+            tour_length4, loop_count, path_indices, FullPoints, graph_material =TSP_solver_visible_steal2(file, association_function, subpath_function, tiebreaker_function, tour_function)    
+            tour_length5, loop_count, path_indices, FullPoints, graph_material =TSP_solver_visible(file, association_function, subpath_function, tiebreaker_function, tour_function)    
+            tour_length6, loop_count, path_indices, FullPoints, graph_material =TSP_solver_steal2(file, association_function, subpath_function, tiebreaker_function, tour_function)    
+            '''
+            #lengths = [benchtour1, benchtour2, tour_length3, tour_length4, tour_length5, tour_length6]
+            print(benchtour1)
+            #best = algs[lengths.index(min(lengths))]
+            #row = {'benchmark':benchtour1, 'bench_steal':benchtour2, 'tsp2': tour_length3, 'tsp2_vis_steal':tour_length4, 'tsp2_vis':tour_length5, 'tsp2_steal':tour_length6, 'best':best }
+            rows.append(benchtour1)
+            outfile.write('\t'.join([str(benchtour1),str(loop_count),str(t2)]) + '\n')
+        
+    #dataframe = pd.DataFrame(rows)
+    #cols = [col for col in stealdf.columns if col!='best']
+    #avgs=stealdf[cols].apply(np.mean,0)
+
+    ##dataframe.to_csv('stealing_bench.csv')
+    return rows##dataframe
+        
+def merge_steal_dfs(row):
+    if np.all(np.array([row['bench_steal'],row['benchmark'], row['tsp2'],row['tsp2_steal'],row['tsp2_vis'],row['tsp2_vis_steal']]) > row['bench_vis_steal']):
+        new_best = 'bench_vis_steal'
+    else:
+        new_best = row['best']
+    return new_best
+import pandas as pd    
+def df_test(row):
+     bestin = [row['benchmark'],row['tsp2'],row['tsp2_steal'],row['tsp2_vis'],row['tsp2_vis_steal']].index(min([row['benchmark'], row['tsp2'],row['tsp2_steal'],row['tsp2_vis'],row['tsp2_vis_steal']]))
+     best = ['benchmark','tsp2','tsp2_steal','tsp2_vis','tsp2_vis_steal'][bestin]
+     within_10 = 1 if ((row['benchmark'] +  10) > min([row['tsp2_steal'],row['tsp2_vis'],row['tsp2_vis_steal'],row['bench_vis_steal']])) else 0
+     return pd.Series({'best3':best,'within_10':within_10} )
+
 def animate_path(FullPoints, loop_count, graph_material,save=False, outfile="animTSP2.mp4"):
     
     #initialize figure and axes
     fig = plt.figure()
-    ax = plt.axes(xlim=(0, 105), ylim=(0, 105))
+    ax = plt.axes(xlim=(-5, 105), ylim=(-5, 105))
     looptext = ax.text(80,102,'')
     
     lineouter, = ax.plot([],[], 'bo-', lw=2)
